@@ -4,7 +4,7 @@
 
 This set of scripts helps you analyze and visualize the dependencies between Python files in a project.
 
-![Dependency Mapper UI](https://github.com/yourusername/dependency-mapper/raw/main/screenshots/dependency_mapper_ui.png)
+![Dependency Mapper UI](https://github.com/Abtomation/DependencyMapper/blob/master/screenshots/2025-03-30_Dependency_Mapper.png)
 
 ## Overview
 
@@ -113,7 +113,7 @@ The UI dependency viewer provides:
 ### Clone the Repository
 
 ```bash
-git clone https://github.com/yourusername/dependency-mapper.git
+git clone https://github.com/Abtomation/dependency-mapper.git
 cd dependency-mapper
 ```
 
