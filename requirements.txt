@@ -1,0 +1,4 @@
+# Required dependencies
+# For graph visualization (optional)
+networkx>=2.5
+matplotlib>=3.3.0
