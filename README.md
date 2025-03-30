@@ -48,6 +48,8 @@ The UI has two main tabs:
   - Search for specific files
   - Open the HTML visualization in a web browser
 
+![Dependency Mapper UI](https://github.com/Abtomation/DependencyMapper/blob/master/screenshots/2025-03-30_Dependency_Mapper.png)
+
 ### Generating the Dependency Map from Command Line
 
 To generate the dependency map from the command line, run:
