@@ -45,11 +45,11 @@ class DependencyMapperUI:
         # Variables
         self.source_folder = tk.StringVar()
         self.output_folder = tk.StringVar()
-        self.start_file = tk.StringVar()
         self.status = tk.StringVar(value="Ready")
         self.progress = tk.DoubleVar(value=0)
         self.search_term = tk.StringVar()
         self.last_selected_file = tk.StringVar()
+        self.selected_system = tk.StringVar()
 
         # Set default values
         self.source_folder.set(os.getcwd())
@@ -58,6 +58,7 @@ class DependencyMapperUI:
         # Store the dependency map
         self.dependency_map = {}
         self.reverse_dependency_map = {}
+        self.systems = []  # List of systems (connected components)
 
         # Load settings from file
         self._load_settings()
@@ -67,6 +68,9 @@ class DependencyMapperUI:
 
         # Bind window close event to save settings
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+
+        # Bind tab change event to update views
+        self.notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
     
     def _create_ui(self):
         """Create the UI elements."""
@@ -86,11 +90,25 @@ class DependencyMapperUI:
         self.dependencies_frame = ttk.Frame(self.notebook, padding="10")
         self.notebook.add(self.dependencies_frame, text="Dependencies")
 
+        # Standalone Files tab (files without dependencies)
+        self.standalone_frame = ttk.Frame(self.notebook, padding="10")
+        self.notebook.add(self.standalone_frame, text="Standalone Files")
+
+        # Unused Files tab (potentially dead code)
+        self.unused_frame = ttk.Frame(self.notebook, padding="10")
+        self.notebook.add(self.unused_frame, text="Unused Files")
+
         # Create the configuration tab content
         self._create_config_tab(config_frame)
 
         # Create the dependencies tab content
         self._create_dependencies_tab(self.dependencies_frame)
+
+        # Create the standalone files tab content
+        self._create_standalone_files_tab(self.standalone_frame)
+
+        # Create the unused files tab content
+        self._create_unused_files_tab(self.unused_frame)
 
         # Status and progress
         status_frame = ttk.Frame(main_frame)
@@ -118,12 +136,17 @@ class DependencyMapperUI:
         ttk.Entry(output_frame, textvariable=self.output_folder, width=50).pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
         ttk.Button(output_frame, text="Browse...", command=self._browse_output_folder).pack(side=tk.RIGHT, padx=5)
 
-        # Start file selection
-        start_file_frame = ttk.LabelFrame(parent, text="Start File", padding="5")
-        start_file_frame.pack(fill=tk.X, pady=5)
+        # Information about automatic scanning
+        info_frame = ttk.LabelFrame(parent, text="Automatic Scanning", padding="5")
+        info_frame.pack(fill=tk.X, pady=5)
 
-        ttk.Entry(start_file_frame, textvariable=self.start_file, width=50).pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
-        ttk.Button(start_file_frame, text="Browse...", command=self._browse_start_file).pack(side=tk.RIGHT, padx=5)
+        info_text = (
+            "The dependency mapper will automatically scan all Python files in the source folder "
+            "and identify systems. A system is a group of files that have dependencies with each other "
+            "but not with files from other systems."
+        )
+        ttk.Label(info_frame, text=info_text, wraplength=800, justify=tk.LEFT).pack(
+            fill=tk.X, padx=5, pady=5)
 
         # Options frame
         options_frame = ttk.LabelFrame(parent, text="Options", padding="5")
@@ -145,11 +168,146 @@ class DependencyMapperUI:
         ttk.Button(button_frame, text="Generate Dependency Map", command=self._generate_map).pack(side=tk.RIGHT, padx=5)
         ttk.Button(button_frame, text="Exit", command=self.root.destroy).pack(side=tk.RIGHT, padx=5)
 
+    def _create_standalone_files_tab(self, parent):
+        """Create the standalone files tab content."""
+        # Explanation frame
+        explanation_frame = ttk.LabelFrame(parent, text="About Standalone Files", padding="10")
+        explanation_frame.pack(fill=tk.X, pady=5)
+
+        explanation_text = (
+            "Standalone files are Python files that don't import any other project files. "
+            "These files typically fall into these categories:\n\n"
+            "• Entry Points: Main scripts meant to be run directly\n"
+            "• Utility Libraries: Self-contained utility modules\n"
+            "• Configuration Files: Files defining constants or settings\n"
+            "• Standalone Modules: Independent, reusable modules\n"
+            "• Dead Code: Files no longer used but not removed\n"
+            "• Test Files: Test modules that don't import implementation\n"
+            "• Documentation Generators: Scripts for generating documentation"
+        )
+
+        ttk.Label(explanation_frame, text=explanation_text, wraplength=800, justify=tk.LEFT).pack(
+            fill=tk.X, padx=5, pady=5)
+
+    def _create_unused_files_tab(self, parent):
+        """Create the unused files tab content."""
+        # Explanation frame
+        explanation_frame = ttk.LabelFrame(parent, text="About Unused Files", padding="10")
+        explanation_frame.pack(fill=tk.X, pady=5)
+
+        explanation_text = (
+            "Unused files are Python files that are potentially dead code. "
+            "These files meet the following criteria:\n\n"
+            "• Not imported by any other files in the project\n"
+            "• Don't appear to be entry points (no __main__ block, not named main.py, etc.)\n\n"
+            "These files might be candidates for cleanup or might need to be integrated "
+            "into the project properly. Review each file carefully before removing."
+        )
+
+        ttk.Label(explanation_frame, text=explanation_text, wraplength=800, justify=tk.LEFT).pack(
+            fill=tk.X, padx=5, pady=5)
+
+        # Search frame
+        search_frame = ttk.Frame(parent)
+        search_frame.pack(fill=tk.X, pady=5)
+
+        self.unused_search_term = tk.StringVar()
+        ttk.Label(search_frame, text="Search:").pack(side=tk.LEFT, padx=5)
+        ttk.Entry(search_frame, textvariable=self.unused_search_term, width=30).pack(
+            side=tk.LEFT, padx=5, fill=tk.X, expand=True)
+        ttk.Button(search_frame, text="Search",
+                  command=self._search_unused_files).pack(side=tk.LEFT, padx=5)
+
+        # Files frame
+        files_frame = ttk.LabelFrame(parent, text="Potentially Unused Files")
+        files_frame.pack(fill=tk.BOTH, expand=True, pady=5)
+
+        # Create treeview for unused files
+        self.unused_tree = ttk.Treeview(files_frame, columns=("file", "last_modified"), show="headings")
+        self.unused_tree.heading("file", text="File Path")
+        self.unused_tree.heading("last_modified", text="Last Modified")
+        self.unused_tree.column("file", width=400)
+        self.unused_tree.column("last_modified", width=200)
+        self.unused_tree.pack(fill=tk.BOTH, expand=True)
+
+        # Bind double-click to jump to the selected file in Dependencies tab
+        self.unused_tree.bind("<Double-1>", self._on_unused_double_click)
+
+        # Add tooltip-like hint
+        ttk.Label(files_frame, text="Double-click to view file in Dependencies tab",
+                 font=("", 8, "italic")).pack(anchor=tk.W, padx=5, pady=(0, 5))
+
+        # Add scrollbar
+        unused_scroll = ttk.Scrollbar(files_frame, orient=tk.VERTICAL,
+                                     command=self.unused_tree.yview)
+        unused_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.unused_tree.configure(yscrollcommand=unused_scroll.set)
+
+        # Button frame
+        button_frame = ttk.Frame(parent)
+        button_frame.pack(fill=tk.X, pady=10)
+
+        ttk.Button(button_frame, text="Refresh",
+                  command=self._refresh_unused_files).pack(side=tk.RIGHT, padx=5)
+        ttk.Button(button_frame, text="Export to CSV",
+                  command=self._export_unused_files).pack(side=tk.RIGHT, padx=5)
+
+        # Search frame
+        search_frame = ttk.Frame(parent)
+        search_frame.pack(fill=tk.X, pady=5)
+
+        self.standalone_search_term = tk.StringVar()
+        ttk.Label(search_frame, text="Search:").pack(side=tk.LEFT, padx=5)
+        ttk.Entry(search_frame, textvariable=self.standalone_search_term, width=30).pack(
+            side=tk.LEFT, padx=5, fill=tk.X, expand=True)
+        ttk.Button(search_frame, text="Search",
+                  command=self._search_standalone_files).pack(side=tk.LEFT, padx=5)
+
+        # Files frame
+        files_frame = ttk.LabelFrame(parent, text="Files Without Dependencies")
+        files_frame.pack(fill=tk.BOTH, expand=True, pady=5)
+
+        # Create treeview for standalone files
+        self.standalone_tree = ttk.Treeview(files_frame, columns=("file", "type"), show="headings")
+        self.standalone_tree.heading("file", text="File Path")
+        self.standalone_tree.heading("type", text="Possible Type")
+        self.standalone_tree.column("file", width=400)
+        self.standalone_tree.column("type", width=200)
+        self.standalone_tree.pack(fill=tk.BOTH, expand=True)
+
+        # Bind double-click to jump to the selected file in Dependencies tab
+        self.standalone_tree.bind("<Double-1>", self._on_standalone_double_click)
+
+        # Add tooltip-like hint
+        ttk.Label(files_frame, text="Double-click to view file in Dependencies tab",
+                 font=("", 8, "italic")).pack(anchor=tk.W, padx=5, pady=(0, 5))
+
+        # Add scrollbar
+        standalone_scroll = ttk.Scrollbar(files_frame, orient=tk.VERTICAL,
+                                         command=self.standalone_tree.yview)
+        standalone_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.standalone_tree.configure(yscrollcommand=standalone_scroll.set)
+
+        # Button frame
+        button_frame = ttk.Frame(parent)
+        button_frame.pack(fill=tk.X, pady=10)
+
+        ttk.Button(button_frame, text="Refresh",
+                  command=self._refresh_standalone_files).pack(side=tk.RIGHT, padx=5)
+        ttk.Button(button_frame, text="Export to CSV",
+                  command=self._export_standalone_files).pack(side=tk.RIGHT, padx=5)
+
     def _create_dependencies_tab(self, parent):
         """Create the dependencies tab content."""
-        # Top frame for search and file selection
+        # Top frame for system and file selection
         top_frame = ttk.Frame(parent)
         top_frame.pack(fill=tk.X, pady=5)
+
+        # System selection dropdown
+        ttk.Label(top_frame, text="Select System:").pack(side=tk.LEFT, padx=5)
+        self.system_combo = ttk.Combobox(top_frame, width=30, state="readonly", textvariable=self.selected_system)
+        self.system_combo.pack(side=tk.LEFT, padx=5)
+        self.system_combo.bind("<<ComboboxSelected>>", self._on_system_selected)
 
         # File selection dropdown
         ttk.Label(top_frame, text="Select File:").pack(side=tk.LEFT, padx=5)
@@ -258,41 +416,25 @@ class DependencyMapperUI:
         # Validate inputs
         source_folder = self.source_folder.get()
         output_folder = self.output_folder.get()
-        start_file = self.start_file.get()
-        
+
         if not os.path.isdir(source_folder):
             messagebox.showerror("Error", "Source folder does not exist.")
             return
-        
+
         if not os.path.isdir(output_folder):
             messagebox.showerror("Error", "Output folder does not exist.")
             return
-        
-        if not start_file:
-            messagebox.showerror("Error", "Please select a start file.")
-            return
-        
-        # Get the absolute path of the start file
-        if not os.path.isabs(start_file):
-            start_file_abs = os.path.join(source_folder, start_file)
-        else:
-            start_file_abs = start_file
-        
-        if not os.path.isfile(start_file_abs):
-            messagebox.showerror("Error", f"Start file does not exist: {start_file_abs}")
-            return
-        
+
         # Start the generation in a separate thread to keep the UI responsive
-        threading.Thread(target=self._generate_map_thread, args=(source_folder, output_folder, start_file)).start()
+        threading.Thread(target=self._generate_map_thread, args=(source_folder, output_folder)).start()
     
-    def _generate_map_thread(self, source_folder, output_folder, start_file):
+    def _generate_map_thread(self, source_folder, output_folder):
         """
         Generate the dependency map in a separate thread.
 
         Args:
             source_folder: The source folder
             output_folder: The output folder
-            start_file: The start file
         """
         try:
             self._update_status("Initializing...", 0)
@@ -304,19 +446,29 @@ class DependencyMapperUI:
             self._update_status("Creating dependency mapper...", 10)
             mapper = DependencyMapper(source_folder)
 
-            # Map dependencies
-            self._update_status(f"Mapping dependencies starting from {start_file}...", 20)
-            self.dependency_map = mapper.map_dependencies(start_file)
+            # Map dependencies for all Python files
+            self._update_status("Mapping dependencies for all Python files...", 20)
+            self.dependency_map = mapper.map_dependencies()
 
             # Build reverse dependency map
             self._update_status("Building reverse dependency map...", 40)
             self._build_reverse_dependency_map()
+
+            # Identify systems
+            self._update_status("Identifying systems...", 50)
+            self.systems = mapper.identify_systems()
+
+            # Identify unused files
+            self._update_status("Identifying unused files...", 60)
+            self.unused_files = mapper.identify_unused_files()
 
             # Calculate statistics
             total_files = len(self.dependency_map)
             total_dependencies = sum(len(deps) for deps in self.dependency_map.values())
             files_with_no_deps = sum(1 for deps in self.dependency_map.values() if not deps)
             max_deps_file = max(self.dependency_map.items(), key=lambda x: len(x[1]), default=("None", []))
+            total_systems = len(self.systems)
+            total_unused = len(self.unused_files)
 
             # Save the dependency map to a JSON file
             self._update_status("Saving dependency map...", 60)
@@ -328,13 +480,20 @@ class DependencyMapperUI:
             if self.create_html.get():
                 self._update_status("Creating HTML visualization...", 70)
                 self.html_output = os.path.join(output_folder, 'dependency_graph.html')
-                visualize_dependencies.create_html_visualization(self.dependency_map, self.html_output)
+                visualize_dependencies.create_html_visualization(
+                    self.dependency_map,
+                    self.html_output,
+                    unused_files=self.unused_files
+                )
 
             if self.create_graph.get():
                 try:
                     self._update_status("Creating graph visualization...", 80)
                     graph_output = os.path.join(output_folder, 'dependency_graph.png')
-                    G = visualize_dependencies.create_graph(self.dependency_map)
+                    G = visualize_dependencies.create_graph(
+                        self.dependency_map,
+                        unused_files=self.unused_files
+                    )
                     visualize_dependencies.visualize_graph(G, graph_output)
                 except ImportError:
                     messagebox.showwarning("Warning", "Could not create graph visualization. Please install networkx and matplotlib.")
@@ -356,15 +515,21 @@ class DependencyMapperUI:
                 f"Total dependencies found: {total_dependencies}\n"
                 f"Files with no dependencies: {files_with_no_deps}\n"
                 f"File with most dependencies: {max_deps_file[0]} ({len(max_deps_file[1])} dependencies)\n"
+                f"Systems identified: {total_systems}\n"
+                f"Potentially unused files: {total_unused}\n"
                 f"Time taken: {duration:.2f} seconds"
             )
             messagebox.showinfo("Summary", summary)
 
-            # Update the dependencies view
+            # Update the dependencies view (which also updates standalone files view)
             self._update_dependencies_view()
 
-            # Switch to the dependencies tab
-            self.notebook.select(1)  # Select the dependencies tab
+            # If there are standalone files, switch to that tab, otherwise go to dependencies tab
+            standalone_files = self._get_standalone_files()
+            if standalone_files:
+                self.notebook.select(2)  # Select the standalone files tab
+            else:
+                self.notebook.select(1)  # Select the dependencies tab
 
         except Exception as e:
             self._update_status(f"Error: {str(e)}", 0)
@@ -384,30 +549,306 @@ class DependencyMapperUI:
                 if dependency in self.reverse_dependency_map:
                     self.reverse_dependency_map[dependency].append(file_path)
 
-    def _update_dependencies_view(self):
-        """Update the dependencies view with the current dependency map."""
-        # Clear the file combobox
-        self.file_combo['values'] = ()
+    def _get_standalone_files(self):
+        """
+        Get files that don't have any dependencies (don't import any other project files).
 
+        Returns:
+            A list of file paths that don't have dependencies
+        """
         if not self.dependency_map:
+            return []
+
+        standalone_files = []
+        for file_path, dependencies in self.dependency_map.items():
+            if not dependencies:
+                standalone_files.append(file_path)
+
+        return sorted(standalone_files)
+
+    def _guess_file_type(self, file_path):
+        """
+        Guess the type of a standalone file based on its name and location.
+
+        Args:
+            file_path: The file path to analyze
+
+        Returns:
+            A string describing the likely type of the file
+        """
+        file_name = os.path.basename(file_path)
+        dir_name = os.path.dirname(file_path)
+
+        # Check if it's imported by other files
+        imported_by = self.reverse_dependency_map.get(file_path, [])
+
+        if not imported_by:
+            if file_name.startswith('__main__') or file_name == 'main.py':
+                return "Entry Point"
+            elif 'test' in file_name.lower() or 'test' in dir_name.lower():
+                return "Test File"
+            elif file_name.startswith('setup') or file_name.endswith('setup.py'):
+                return "Setup/Configuration"
+            elif 'config' in file_name.lower() or 'settings' in file_name.lower():
+                return "Configuration"
+            elif file_name.startswith('__init__'):
+                return "Package Initializer"
+            elif 'doc' in file_name.lower() or 'doc' in dir_name.lower():
+                return "Documentation"
+            else:
+                return "Standalone Module"
+        else:
+            return "Utility Library"
+
+    def _update_standalone_files_view(self):
+        """Update the standalone files view with current data."""
+        # Clear the treeview
+        for item in self.standalone_tree.get_children():
+            self.standalone_tree.delete(item)
+
+        # Get standalone files
+        standalone_files = self._get_standalone_files()
+
+        # Add files to the treeview
+        for file_path in standalone_files:
+            file_type = self._guess_file_type(file_path)
+            self.standalone_tree.insert("", "end", values=(file_path, file_type))
+
+    def _search_standalone_files(self):
+        """Search for standalone files matching the search term."""
+        search_term = self.standalone_search_term.get().lower()
+
+        # Clear the treeview
+        for item in self.standalone_tree.get_children():
+            self.standalone_tree.delete(item)
+
+        # Get standalone files
+        standalone_files = self._get_standalone_files()
+
+        # Add matching files to the treeview
+        for file_path in standalone_files:
+            if search_term in file_path.lower():
+                file_type = self._guess_file_type(file_path)
+                self.standalone_tree.insert("", "end", values=(file_path, file_type))
+
+    def _refresh_standalone_files(self):
+        """Refresh the standalone files view."""
+        self._update_standalone_files_view()
+
+    def _on_standalone_double_click(self, event):
+        """Handle double-click on a standalone file."""
+        # Get the selected item
+        selection = self.standalone_tree.selection()
+        if not selection:
             return
 
-        # Sort files by name
-        sorted_files = sorted(self.dependency_map.keys())
+        # Get the file path
+        file_path = self.standalone_tree.item(selection[0], "values")[0]
 
-        # Update the file combobox
-        self.file_combo['values'] = sorted_files
+        # Switch to the Dependencies tab
+        self.notebook.select(1)  # Select the Dependencies tab
 
-        # Try to select the last selected file, or the first file if none
-        last_file = self.last_selected_file.get()
-        if last_file and last_file in sorted_files:
-            index = sorted_files.index(last_file)
-            self.file_combo.current(index)
-        elif sorted_files:
-            self.file_combo.current(0)
+        # Select the file in the combobox
+        if file_path in self.file_combo["values"]:
+            self.file_combo.set(file_path)
+            self._on_file_selected(None)
 
-        # Update the view
-        self._on_file_selected(None)
+    def _update_unused_files_view(self):
+        """Update the unused files view with current data."""
+        # Clear the treeview
+        for item in self.unused_tree.get_children():
+            self.unused_tree.delete(item)
+
+        if not hasattr(self, 'unused_files') or not self.unused_files:
+            return
+
+        # Add files to the treeview
+        for file_path in self.unused_files:
+            # Get last modified time
+            try:
+                abs_path = os.path.join(self.source_folder.get(), file_path)
+                last_modified = time.strftime('%Y-%m-%d %H:%M:%S',
+                                             time.localtime(os.path.getmtime(abs_path)))
+            except:
+                last_modified = "Unknown"
+
+            self.unused_tree.insert("", "end", values=(file_path, last_modified))
+
+    def _search_unused_files(self):
+        """Search for unused files matching the search term."""
+        search_term = self.unused_search_term.get().lower()
+
+        # Clear the treeview
+        for item in self.unused_tree.get_children():
+            self.unused_tree.delete(item)
+
+        if not hasattr(self, 'unused_files') or not self.unused_files:
+            return
+
+        # Add matching files to the treeview
+        for file_path in self.unused_files:
+            if search_term in file_path.lower():
+                # Get last modified time
+                try:
+                    abs_path = os.path.join(self.source_folder.get(), file_path)
+                    last_modified = time.strftime('%Y-%m-%d %H:%M:%S',
+                                                 time.localtime(os.path.getmtime(abs_path)))
+                except:
+                    last_modified = "Unknown"
+
+                self.unused_tree.insert("", "end", values=(file_path, last_modified))
+
+    def _refresh_unused_files(self):
+        """Refresh the unused files view."""
+        self._update_unused_files_view()
+
+    def _on_unused_double_click(self, event):
+        """Handle double-click on an unused file."""
+        # Get the selected item
+        selection = self.unused_tree.selection()
+        if not selection:
+            return
+
+        # Get the file path
+        file_path = self.unused_tree.item(selection[0], "values")[0]
+
+        # Switch to the Dependencies tab
+        self.notebook.select(1)  # Select the Dependencies tab
+
+        # Select the file in the combobox
+        if file_path in self.file_combo["values"]:
+            self.file_combo.set(file_path)
+            self._on_file_selected(None)
+
+    def _export_unused_files(self):
+        """Export the unused files to a CSV file."""
+        if not hasattr(self, 'unused_files') or not self.unused_files:
+            messagebox.showinfo("Info", "No unused files available. Generate a map first.")
+            return
+
+        # Ask for the output file
+        output_file = filedialog.asksaveasfilename(
+            initialdir=self.output_folder.get(),
+            defaultextension=".csv",
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+            title="Export Unused Files"
+        )
+
+        if not output_file:
+            return
+
+        try:
+            # Write to CSV
+            with open(output_file, 'w', newline='', encoding='utf-8') as f:
+                import csv
+                writer = csv.writer(f)
+                writer.writerow(["File Path", "Last Modified"])
+
+                for file_path in self.unused_files:
+                    # Get last modified time
+                    try:
+                        abs_path = os.path.join(self.source_folder.get(), file_path)
+                        last_modified = time.strftime('%Y-%m-%d %H:%M:%S',
+                                                     time.localtime(os.path.getmtime(abs_path)))
+                    except:
+                        last_modified = "Unknown"
+
+                    writer.writerow([file_path, last_modified])
+
+            messagebox.showinfo("Export Complete", f"Unused files exported to {output_file}")
+
+        except Exception as e:
+            messagebox.showerror("Error", f"Error exporting unused files: {str(e)}")
+
+    def _export_standalone_files(self):
+        """Export the standalone files to a CSV file."""
+        if not self.dependency_map:
+            messagebox.showinfo("Info", "No dependency map available. Generate a map first.")
+            return
+
+        # Ask for the output file
+        output_file = filedialog.asksaveasfilename(
+            initialdir=self.output_folder.get(),
+            defaultextension=".csv",
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+            title="Export Standalone Files"
+        )
+
+        if not output_file:
+            return
+
+        try:
+            # Get standalone files
+            standalone_files = self._get_standalone_files()
+
+            # Write to CSV
+            with open(output_file, 'w', newline='', encoding='utf-8') as f:
+                import csv
+                writer = csv.writer(f)
+                writer.writerow(["File Path", "Possible Type"])
+
+                for file_path in standalone_files:
+                    file_type = self._guess_file_type(file_path)
+                    writer.writerow([file_path, file_type])
+
+            messagebox.showinfo("Export Complete", f"Standalone files exported to {output_file}")
+
+        except Exception as e:
+            messagebox.showerror("Error", f"Error exporting standalone files: {str(e)}")
+
+    def _update_dependencies_view(self):
+        """Update the dependencies view with the current dependency map."""
+        # Clear the system and file comboboxes
+        self.system_combo['values'] = ()
+        self.file_combo['values'] = ()
+
+        if not self.dependency_map or not self.systems:
+            return
+
+        # Update the system combobox
+        system_names = [f"System {s['id']}: {s['name']} ({s['file_count']} files)" for s in self.systems]
+        self.system_combo['values'] = system_names
+
+        # Select the first system
+        if system_names:
+            self.system_combo.current(0)
+            self._on_system_selected(None)
+
+        # Update the standalone files view
+        self._update_standalone_files_view()
+
+        # Update the unused files view
+        if hasattr(self, 'unused_files'):
+            self._update_unused_files_view()
+
+    def _on_system_selected(self, event):
+        """Handle system selection in the combobox."""
+        selected_system = self.system_combo.get()
+        if not selected_system or not self.systems:
+            return
+
+        # Extract system ID from the selection
+        try:
+            system_id = int(selected_system.split(':')[0].replace('System ', ''))
+            system = next((s for s in self.systems if s['id'] == system_id), None)
+
+            if system:
+                # Update the file combobox with files from this system
+                sorted_files = sorted(system['files'])
+                self.file_combo['values'] = sorted_files
+
+                # Try to select the last selected file if it's in this system, or the first file
+                last_file = self.last_selected_file.get()
+                if last_file and last_file in sorted_files:
+                    index = sorted_files.index(last_file)
+                    self.file_combo.current(index)
+                elif sorted_files:
+                    self.file_combo.current(0)
+
+                # Update the view
+                self._on_file_selected(None)
+        except (ValueError, IndexError):
+            pass
 
     def _on_file_selected(self, event):
         """Handle file selection in the combobox."""
@@ -438,27 +879,42 @@ class DependencyMapperUI:
         self._save_settings()
 
     def _search_dependencies(self):
-        """Search for files matching the search term."""
+        """Search for files matching the search term within the selected system."""
         search_term = self.search_term.get().lower()
         if not search_term:
             return
 
-        # Find matching files
-        matching_files = [
-            file_path for file_path in self.dependency_map.keys()
-            if search_term in file_path.lower()
-        ]
-
-        if not matching_files:
-            messagebox.showinfo("Search Results", "No matching files found.")
+        # Get the selected system
+        selected_system = self.system_combo.get()
+        if not selected_system or not self.systems:
             return
 
-        # Update the file combobox
-        self.file_combo['values'] = matching_files
+        try:
+            # Extract system ID from the selection
+            system_id = int(selected_system.split(':')[0].replace('System ', ''))
+            system = next((s for s in self.systems if s['id'] == system_id), None)
 
-        # Select the first matching file
-        self.file_combo.current(0)
-        self._on_file_selected(None)
+            if not system:
+                return
+
+            # Find matching files within this system
+            matching_files = [
+                file_path for file_path in system['files']
+                if search_term in file_path.lower()
+            ]
+
+            if not matching_files:
+                messagebox.showinfo("Search Results", "No matching files found in the selected system.")
+                return
+
+            # Update the file combobox
+            self.file_combo['values'] = matching_files
+
+            # Select the first matching file
+            self.file_combo.current(0)
+            self._on_file_selected(None)
+        except (ValueError, IndexError):
+            pass
 
     def _refresh_dependencies(self):
         """Refresh the dependencies view."""
@@ -470,6 +926,19 @@ class DependencyMapperUI:
             webbrowser.open(f"file://{os.path.abspath(self.html_output)}")
         else:
             messagebox.showinfo("Information", "Please generate the dependency map first.")
+
+    def _on_tab_changed(self, event):
+        """Handle tab change event."""
+        # Get the selected tab index
+        selected_tab = self.notebook.index("current")
+
+        # If the standalone files tab is selected, refresh it
+        if selected_tab == 2 and self.dependency_map:  # 2 is the index of the standalone files tab
+            self._update_standalone_files_view()
+
+        # If the unused files tab is selected, refresh it
+        elif selected_tab == 3 and hasattr(self, 'unused_files'):  # 3 is the index of the unused files tab
+            self._update_unused_files_view()
 
     def _on_dependency_double_click(self, event):
         """Handle double-clicking on a dependency in either treeview."""
@@ -519,8 +988,7 @@ class DependencyMapperUI:
                         if os.path.isdir(folder):
                             self.output_folder.set(folder)
 
-                    if 'start_file' in config['General']:
-                        self.start_file.set(config['General']['start_file'])
+                    # No longer need to load start_file
 
                     if 'last_selected_file' in config['General']:
                         self.last_selected_file.set(config['General']['last_selected_file'])
@@ -566,7 +1034,6 @@ class DependencyMapperUI:
         config['General'] = {
             'source_folder': self.source_folder.get(),
             'output_folder': self.output_folder.get(),
-            'start_file': self.start_file.get(),
             'last_selected_file': self.last_selected_file.get()
         }
 

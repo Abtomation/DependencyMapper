@@ -27,24 +27,31 @@ def load_dependency_map(file_path: str) -> Dict[str, List[str]]:
         print(f"Error loading dependency map: {str(e)}")
         return {}
 
-def create_graph(dependency_map: Dict[str, List[str]]) -> nx.DiGraph:
+def create_graph(dependency_map: Dict[str, List[str]], unused_files: List[str] = None) -> nx.DiGraph:
     """
     Create a directed graph from the dependency map.
-    
+
     Args:
         dependency_map: The dependency map
-        
+        unused_files: List of potentially unused files (optional)
+
     Returns:
         The directed graph
     """
     G = nx.DiGraph()
-    
+
+    # Initialize unused_files if not provided
+    if unused_files is None:
+        unused_files = []
+
     # Add nodes
     for file_path in dependency_map.keys():
         # Use just the filename for display
         node_name = os.path.basename(file_path)
-        G.add_node(node_name, full_path=file_path)
-    
+        # Mark if this is an unused file
+        is_unused = file_path in unused_files
+        G.add_node(node_name, full_path=file_path, is_unused=is_unused)
+
     # Add edges
     for file_path, dependencies in dependency_map.items():
         source = os.path.basename(file_path)
@@ -52,48 +59,66 @@ def create_graph(dependency_map: Dict[str, List[str]]) -> nx.DiGraph:
             target = os.path.basename(dependency)
             if target in G.nodes():
                 G.add_edge(source, target)
-    
+
     return G
 
 def visualize_graph(G: nx.DiGraph, output_file: str = 'dependency_graph.png') -> None:
     """
     Visualize the graph and save it to a file.
-    
+
     Args:
         G: The directed graph
         output_file: The output file path
     """
     plt.figure(figsize=(20, 20))
-    
+
     # Use a layout that works well for directed graphs
     pos = nx.spring_layout(G, k=0.3, iterations=50)
-    
-    # Draw nodes
-    nx.draw_networkx_nodes(G, pos, node_size=500, node_color='lightblue', alpha=0.8)
-    
+
+    # Separate nodes into unused and normal nodes
+    unused_nodes = [node for node, attrs in G.nodes(data=True) if attrs.get('is_unused', False)]
+    normal_nodes = [node for node in G.nodes() if node not in unused_nodes]
+
+    # Draw normal nodes in light blue
+    nx.draw_networkx_nodes(G, pos, nodelist=normal_nodes, node_size=500, node_color='lightblue', alpha=0.8)
+
+    # Draw unused nodes in red
+    if unused_nodes:
+        nx.draw_networkx_nodes(G, pos, nodelist=unused_nodes, node_size=500, node_color='red', alpha=0.8)
+
     # Draw edges
     nx.draw_networkx_edges(G, pos, width=1.0, alpha=0.5, arrows=True, arrowsize=20)
-    
+
     # Draw labels
     nx.draw_networkx_labels(G, pos, font_size=10, font_family='sans-serif')
-    
+
+    # Add a legend if there are unused files
+    if unused_nodes:
+        plt.plot([], [], 'o', color='red', label='Unused Files')
+        plt.plot([], [], 'o', color='lightblue', label='Active Files')
+        plt.legend(loc='upper right')
+
     # Save the figure
     plt.axis('off')
     plt.tight_layout()
     plt.savefig(output_file, dpi=300, bbox_inches='tight')
     print(f"Graph visualization saved to {output_file}")
-    
+
     # Close the figure to free memory
     plt.close()
 
-def create_html_visualization(dependency_map: Dict[str, List[str]], output_file: str = 'dependency_graph.html') -> None:
+def create_html_visualization(dependency_map: Dict[str, List[str]], output_file: str = 'dependency_graph.html', unused_files: List[str] = None) -> None:
     """
     Create an HTML visualization of the dependency map.
 
     Args:
         dependency_map: The dependency map
         output_file: The output file path
+        unused_files: List of potentially unused files (optional)
     """
+    # Initialize unused_files if not provided
+    if unused_files is None:
+        unused_files = []
     # Create a simple HTML file with a tree view
     html = """
     <!DOCTYPE html>
@@ -137,6 +162,10 @@ def create_html_visualization(dependency_map: Dict[str, List[str]], output_file:
             }
             .highlight {
                 background-color: #ffffcc;
+            }
+            .unused-file {
+                background-color: #ffdddd;
+                border-color: #ff9999;
             }
             .section-title {
                 font-weight: bold;
@@ -193,6 +222,13 @@ def create_html_visualization(dependency_map: Dict[str, List[str]], output_file:
             <button onclick="collapseAll()">Collapse All</button>
         </div>
 
+        <div style="margin-bottom: 15px;">
+            <div style="display: inline-block; margin-right: 20px;">
+                <span style="display: inline-block; width: 15px; height: 15px; background-color: #ffdddd; border: 1px solid #ff9999; margin-right: 5px;"></span>
+                <span>Unused Files (potentially dead code)</span>
+            </div>
+        </div>
+
         <div class="tab-container">
             <div class="tab active" onclick="switchTab('fileView')">File View</div>
             <div class="tab" onclick="switchTab('dependencyMatrix')">Dependency Matrix</div>
@@ -222,10 +258,15 @@ def create_html_visualization(dependency_map: Dict[str, List[str]], output_file:
 
         total_relations = len(dependencies) + len(imported_by)
 
+        # Check if this is an unused file
+        is_unused = file_path in unused_files
+        unused_class = 'unused-file' if is_unused else ''
+        unused_label = ' [UNUSED]' if is_unused else ''
+
         html += f"""
-        <div class="file" id="{file_path.replace('/', '_')}">
+        <div class="file {unused_class}" id="{file_path.replace('/', '_')}">
             <span class="toggle" onclick="toggle(this)">[+]</span>
-            <span>{file_path}</span> ({total_relations} relationships: {len(dependencies)} imports, {len(imported_by)} imported by)
+            <span>{file_path}{unused_label}</span> ({total_relations} relationships: {len(dependencies)} imports, {len(imported_by)} imported by)
             <div class="dependencies">
         """
 
@@ -275,9 +316,14 @@ def create_html_visualization(dependency_map: Dict[str, List[str]], output_file:
         imported_by = reverse_dependency_map[file_path]
         total_relations = len(dependencies) + len(imported_by)
 
+        # Check if this is an unused file
+        is_unused = file_path in unused_files
+        unused_class = 'class="unused-file"' if is_unused else ''
+        unused_label = ' [UNUSED]' if is_unused else ''
+
         html += f"""
-                        <tr>
-                            <td>{file_path}</td>
+                        <tr {unused_class}>
+                            <td>{file_path}{unused_label}</td>
                             <td>{len(dependencies)}</td>
                             <td>{len(imported_by)}</td>
                             <td>{total_relations}</td>

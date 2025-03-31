@@ -252,18 +252,29 @@ class DependencyMapper:
             print(f"Error extracting imports from {file_path}: {str(e)}")
             return []
 
-    def map_dependencies(self, start_file: str) -> Dict[str, List[str]]:
+    def map_dependencies(self, start_file: Optional[str] = None) -> Dict[str, List[str]]:
         """
-        Map dependencies starting from a file.
+        Map dependencies for all Python files in the project or starting from a specific file.
 
         Args:
-            start_file: The file to start mapping from
+            start_file: Optional file to start mapping from. If None, all Python files are scanned.
 
         Returns:
             A dictionary mapping files to their dependencies
         """
-        rel_start_file = self.get_relative_path(start_file)
-        self._map_dependencies_recursive(rel_start_file)
+        if start_file:
+            # Map dependencies starting from a specific file
+            rel_start_file = self.get_relative_path(start_file)
+            self._map_dependencies_recursive(rel_start_file)
+        else:
+            # Map dependencies for all Python files in the project
+            for root, _, files in os.walk(self.root_dir):
+                for file in files:
+                    if file.endswith('.py'):
+                        file_path = os.path.join(root, file)
+                        rel_path = self.get_relative_path(file_path)
+                        self._map_dependencies_recursive(rel_path)
+
         return self.dependency_map
 
     def _map_dependencies_recursive(self, file_path: str) -> None:
@@ -296,6 +307,161 @@ class DependencyMapper:
         # Recursively map dependencies
         for dependency in dependencies:
             self._map_dependencies_recursive(dependency)
+
+    def identify_systems(self) -> List[Dict[str, Any]]:
+        """
+        Identify systems in the dependency map.
+        A system is a group of files that have dependencies with each other but not with files from other systems.
+
+        Returns:
+            A list of dictionaries, each representing a system with its files and metadata
+        """
+        if not self.dependency_map:
+            return []
+
+        # Create a graph representation
+        graph = {}
+        for file, deps in self.dependency_map.items():
+            if file not in graph:
+                graph[file] = set()
+            for dep in deps:
+                graph[file].add(dep)
+                if dep not in graph:
+                    graph[dep] = set()
+                graph[dep].add(file)  # Add reverse dependency
+
+        # Find connected components (systems)
+        visited = set()
+        systems = []
+
+        for node in graph:
+            if node in visited:
+                continue
+
+            # Start a new system
+            system_files = set()
+            self._dfs(node, graph, visited, system_files)
+
+            if len(system_files) >= 2:  # Only consider systems with at least 2 files
+                # Create system metadata
+                system = {
+                    "name": self._generate_system_name(system_files),
+                    "files": sorted(list(system_files)),
+                    "file_count": len(system_files)
+                }
+                systems.append(system)
+
+        # Sort systems by size (largest first)
+        systems.sort(key=lambda x: x["file_count"], reverse=True)
+
+        # Add system index
+        for i, system in enumerate(systems):
+            system["id"] = i + 1
+
+        return systems
+
+    def _dfs(self, node: str, graph: Dict[str, Set[str]], visited: Set[str], component: Set[str]) -> None:
+        """
+        Depth-first search to find connected components.
+
+        Args:
+            node: The current node
+            graph: The graph representation
+            visited: Set of visited nodes
+            component: The current component being built
+        """
+        visited.add(node)
+        component.add(node)
+
+        for neighbor in graph.get(node, set()):
+            if neighbor not in visited:
+                self._dfs(neighbor, graph, visited, component)
+
+    def _generate_system_name(self, files: Set[str]) -> str:
+        """
+        Generate a name for a system based on its files.
+
+        Args:
+            files: The files in the system
+
+        Returns:
+            A name for the system
+        """
+        # Try to find a common directory
+        common_dirs = {}
+        for file in files:
+            dir_name = os.path.dirname(file)
+            if dir_name:
+                common_dirs[dir_name] = common_dirs.get(dir_name, 0) + 1
+
+        # Find the most common directory
+        if common_dirs:
+            most_common_dir = max(common_dirs.items(), key=lambda x: x[1])
+            if most_common_dir[1] >= len(files) / 2:  # If at least half the files are in this directory
+                return f"System: {most_common_dir[0]}"
+
+        # Otherwise, use the first few file names
+        file_names = [os.path.basename(f) for f in sorted(files)]
+        if len(file_names) <= 3:
+            return f"System: {', '.join(file_names)}"
+        else:
+            return f"System: {', '.join(file_names[:3])}..."
+
+    def identify_unused_files(self) -> List[str]:
+        """
+        Identify files that are potentially unused (dead code).
+        These are files that:
+        1. Aren't imported by any other files
+        2. Don't appear to be entry points
+
+        Returns:
+            A list of potentially unused file paths
+        """
+        if not self.dependency_map:
+            return []
+
+        # Build reverse dependency map if not already built
+        reverse_map = {}
+        for file_path, deps in self.dependency_map.items():
+            if file_path not in reverse_map:
+                reverse_map[file_path] = []
+
+            for dep in deps:
+                if dep not in reverse_map:
+                    reverse_map[dep] = []
+                reverse_map[dep].append(file_path)
+
+        # Find files that aren't imported by any other files
+        not_imported = []
+        for file_path in self.dependency_map:
+            if not reverse_map.get(file_path, []):
+                not_imported.append(file_path)
+
+        # Filter out obvious entry points
+        unused_files = []
+        for file_path in not_imported:
+            # Skip files with names that suggest they're entry points
+            file_name = os.path.basename(file_path)
+            if file_name in ('main.py', '__main__.py', 'app.py', 'run.py', 'server.py'):
+                continue
+
+            # Check if the file has a "if __name__ == '__main__'" block
+            try:
+                abs_path = self.get_absolute_path(file_path)
+                with open(abs_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+
+                if "__name__" in content and "__main__" in content and "if" in content:
+                    # This is likely an entry point, skip it
+                    continue
+            except Exception:
+                # If we can't read the file, include it as potentially unused
+                pass
+
+            # This file is potentially unused
+            unused_files.append(file_path)
+
+        return sorted(unused_files)
 
 def main():
     """Main function to run the dependency mapper."""
