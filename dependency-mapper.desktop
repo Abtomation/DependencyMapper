@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Dependency Mapper
+Comment=Analyze and visualize dependencies between Python files
+Exec=python %k/dependency_mapper_ui.py
+Path=%k
+Icon=%k/icons/dependency_mapper.png
+Terminal=false
+Categories=Development;
